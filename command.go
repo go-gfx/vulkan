@@ -96,6 +96,74 @@ func (c *CommandBuffer) Dispatch(p *Pipeline, x, y, z uint32) error {
 	return nil
 }
 
+// Barrier records a memory dependency from every compute-shader and transfer
+// write submitted to the queue before it to every compute-shader and transfer
+// read or write submitted after it: a global VkMemoryBarrier with
+// srcStageMask COMPUTE_SHADER|TRANSFER, srcAccessMask SHADER_WRITE|TRANSFER_WRITE,
+// dstStageMask COMPUTE_SHADER|TRANSFER and dstAccessMask
+// SHADER_READ|SHADER_WRITE|TRANSFER_READ|TRANSFER_WRITE.
+//
+// Record it before a Dispatch or Copy that reads or overwrites what an earlier
+// one wrote, whether that one is in this command buffer or in a command buffer
+// submitted before it on the same queue and still running. Without it nothing
+// orders them: queue submission order only orders the start of commands, so two
+// submissions can overlap, and the later one can read stale data (a
+// read-after-write hazard) or have its write overwritten (write-after-write).
+//
+// Why this and no semaphore: the Vulkan specification, vkCmdPipelineBarrier,
+// says that outside a render pass "the first synchronization scope includes all
+// commands that occur earlier in submission order" and "the second
+// synchronization scope includes all commands that occur later in submission
+// order", each limited to the stages of the masks, and that the barrier "defines
+// a memory dependency between commands that were submitted to the same queue
+// before it" and after it. Both submissions here are on one queue, so a barrier
+// at the start of the second one orders its dispatch after the first one's
+// writes, with no semaphore and no host wait.
+func (c *CommandBuffer) Barrier() error {
+	if c.closed || c.d.closed {
+		return ErrClosed
+	}
+	if !c.recording {
+		return ErrInvalid
+	}
+	const stages = vk.PipelineStageComputeShaderBit | vk.PipelineStageTransferBit
+	mb := vk.MemoryBarrier{
+		SType:         vk.StructureTypeMemoryBarrier,
+		SrcAccessMask: vk.AccessFlags(vk.AccessShaderWriteBit | vk.AccessTransferWriteBit),
+		DstAccessMask: vk.AccessFlags(vk.AccessShaderReadBit | vk.AccessShaderWriteBit | vk.AccessTransferReadBit | vk.AccessTransferWriteBit),
+	}
+	c.d.f.CmdPipelineBarrier(c.h, uint32(stages), uint32(stages), 0, 1, &mb, 0, nil, 0, nil)
+	return nil
+}
+
+// Copy records a copy of size bytes from the start of src to the start of dst,
+// then a barrier that makes the written bytes visible to the host (so a host
+// buffer can be read after the fence). src needs UsageTransferSrc and dst
+// UsageTransferDst. Order a Copy after a Dispatch that wrote src, or before a
+// Dispatch that reads dst, with Barrier.
+func (c *CommandBuffer) Copy(dst, src *Buffer, size uint64) error {
+	if c.closed || c.d.closed || dst.closed || src.closed {
+		return ErrClosed
+	}
+	if !c.recording || dst.d != c.d || src.d != c.d || size == 0 ||
+		size > dst.size || size > src.size ||
+		src.usage&UsageTransferSrc == 0 || dst.usage&UsageTransferDst == 0 {
+		return ErrInvalid
+	}
+	f, h := c.d.f, c.h
+	rg := vk.BufferCopy{Size: vk.DeviceSize(size)}
+	f.CmdCopyBuffer(h, src.buf, dst.buf, 1, &rg)
+	mb := vk.MemoryBarrier{
+		SType:         vk.StructureTypeMemoryBarrier,
+		SrcAccessMask: vk.AccessFlags(vk.AccessTransferWriteBit),
+		DstAccessMask: vk.AccessFlags(vk.AccessHostReadBit),
+	}
+	f.CmdPipelineBarrier(h,
+		uint32(vk.PipelineStageTransferBit), uint32(vk.PipelineStageHostBit), 0,
+		1, &mb, 0, nil, 0, nil)
+	return nil
+}
+
 // End finishes recording.
 func (c *CommandBuffer) End() error {
 	if c.closed || c.d.closed {

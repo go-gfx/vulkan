@@ -22,6 +22,7 @@ type Global struct {
 type InstanceFuncs struct {
 	EnumeratePhysicalDevices               func(Instance, *uint32, *PhysicalDevice) Result
 	GetPhysicalDeviceProperties2           func(PhysicalDevice, *PhysicalDeviceProperties2)
+	GetPhysicalDeviceFeatures              func(PhysicalDevice, *PhysicalDeviceFeatures)
 	GetPhysicalDeviceMemoryProperties      func(PhysicalDevice, *PhysicalDeviceMemoryProperties)
 	GetPhysicalDeviceQueueFamilyProperties func(PhysicalDevice, *uint32, *QueueFamilyProperties)
 	CreateDevice                           func(PhysicalDevice, *DeviceCreateInfo, Alloc, *Device) Result
@@ -59,6 +60,7 @@ type DeviceFuncs struct {
 	CmdBindPipeline             func(CommandBuffer, PipelineBindPoint, Pipeline)
 	CmdBindDescriptorSets       func(CommandBuffer, PipelineBindPoint, PipelineLayout, uint32, uint32, *DescriptorSet, uint32, *uint32)
 	CmdDispatch                 func(CommandBuffer, uint32, uint32, uint32)
+	CmdCopyBuffer               func(CommandBuffer, Buffer, Buffer, uint32, *BufferCopy)
 	CmdPipelineBarrier          func(CommandBuffer, uint32, uint32, uint32, uint32, *MemoryBarrier, uint32, unsafe.Pointer, uint32, unsafe.Pointer)
 	QueueSubmit                 func(Queue, uint32, *SubmitInfo, Fence) Result
 	QueueWaitIdle               func(Queue) Result

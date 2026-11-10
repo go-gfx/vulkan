@@ -36,6 +36,15 @@ type fakeLoader struct {
 	backing     map[vk.DeviceMemory][]byte
 	writes      []vk.WriteDescriptorSet
 	dispatches  [][3]uint32
+	barriers    []fakeBarrier
+	copies      []vk.BufferCopy
+	enabled     *vk.PhysicalDeviceFeatures // what CreateDevice was asked to enable
+}
+
+// fakeBarrier is one vkCmdPipelineBarrier with a global memory barrier.
+type fakeBarrier struct {
+	src, dst             uint32
+	srcAccess, dstAccess vk.AccessFlags
 }
 
 type fakeDev struct {
@@ -47,6 +56,8 @@ type fakeDev struct {
 	uniform  uint32
 	maxAlloc uint64
 	groups   [3]uint32
+	robust   bool // robustBufferAccess offered
+	rte      bool // shaderRoundingModeRTEFloat32
 }
 
 func newFake() *fakeLoader {
@@ -55,8 +66,8 @@ func newFake() *fakeLoader {
 		live: map[string]int{}, maxLive: map[string]int{}, backing: map[vk.DeviceMemory][]byte{},
 		layers: []string{"VK_LAYER_MESA_overlay", validationLayer},
 		devs: []fakeDev{
-			{"cpu", vk.PhysicalDeviceTypeCpu, 0x10005, 1<<22 | 3<<12, 1 << 27, 1 << 16, 1 << 30, [3]uint32{65535, 65535, 65535}},
-			{"gpu", vk.PhysicalDeviceTypeDiscreteGpu, VendorAMD, 1<<22 | 3<<12, 1 << 27, 1 << 16, 1 << 30, [3]uint32{65535, 65535, 65535}},
+			{"cpu", vk.PhysicalDeviceTypeCpu, 0x10005, 1<<22 | 3<<12, 1 << 27, 1 << 16, 1 << 30, [3]uint32{65535, 65535, 65535}, false, false},
+			{"gpu", vk.PhysicalDeviceTypeDiscreteGpu, VendorAMD, 1<<22 | 3<<12, 1 << 27, 1 << 16, 1 << 30, [3]uint32{65535, 65535, 65535}, true, true},
 		},
 		families: []vk.QueueFamilyProperties{
 			{QueueFlags: vk.QueueFlags(vk.QueueGraphicsBit | vk.QueueComputeBit), QueueCount: 1},
@@ -177,11 +188,23 @@ func (f *fakeLoader) Instance(vk.Instance) (*vk.InstanceFuncs, error) {
 			maint := (*vk.PhysicalDeviceMaintenance3Properties)(p2.PNext)
 			maint.MaxMemoryAllocationSize = vk.DeviceSize(d.maxAlloc)
 			drv := (*vk.PhysicalDeviceDriverProperties)(maint.PNext)
+			fc := (*vk.PhysicalDeviceFloatControlsProperties)(drv.PNext)
+			if fc.SType != vk.StructureTypePhysicalDeviceFloatControlsProperties {
+				panic("the property chain lacks the float controls")
+			}
+			if d.rte {
+				fc.ShaderRoundingModeRTEFloat32 = 1
+			}
 			if maint.SType != vk.StructureTypePhysicalDeviceMaintenance3Properties || drv.SType != vk.StructureTypePhysicalDeviceDriverProperties {
 				panic("the property chain is malformed")
 			}
 			copy(drv.DriverName[:], "fakedrv")
 			copy(drv.DriverInfo[:], "fake 1.0")
+		},
+		GetPhysicalDeviceFeatures: func(h vk.PhysicalDevice, ft *vk.PhysicalDeviceFeatures) {
+			if f.devs[h-1].robust {
+				ft.RobustBufferAccess = 1
+			}
 		},
 		GetPhysicalDeviceMemoryProperties: func(_ vk.PhysicalDevice, m *vk.PhysicalDeviceMemoryProperties) {
 			m.MemoryTypeCount = uint32(len(f.memTypes))
@@ -201,6 +224,11 @@ func (f *fakeLoader) Instance(vk.Instance) (*vk.InstanceFuncs, error) {
 			q := (*vk.DeviceQueueCreateInfo)(ci.PQueueCreateInfos)
 			if ci.QueueCreateInfoCount != 1 || q.QueueCount != 1 || *(*float32)(q.PQueuePriorities) != 1 {
 				return vk.ErrorUnknown
+			}
+			f.enabled = nil
+			if ci.PEnabledFeatures != nil {
+				v := *(*vk.PhysicalDeviceFeatures)(ci.PEnabledFeatures)
+				f.enabled = &v
 			}
 			*out = vk.Device(f.create("device"))
 			return vk.Success
@@ -320,7 +348,13 @@ func (f *fakeLoader) Device(vk.Instance, vk.Device) (*vk.DeviceFuncs, error) {
 		CmdDispatch: func(_ vk.CommandBuffer, x, y, z uint32) {
 			f.dispatches = append(f.dispatches, [3]uint32{x, y, z})
 		},
-		CmdPipelineBarrier: func(vk.CommandBuffer, uint32, uint32, uint32, uint32, *vk.MemoryBarrier, uint32, unsafe.Pointer, uint32, unsafe.Pointer) {
+		CmdCopyBuffer: func(_ vk.CommandBuffer, _, _ vk.Buffer, n uint32, r *vk.BufferCopy) {
+			f.copies = append(f.copies, unsafe.Slice(r, n)...)
+		},
+		CmdPipelineBarrier: func(_ vk.CommandBuffer, src, dst, _ uint32, nm uint32, mb *vk.MemoryBarrier, _ uint32, _ unsafe.Pointer, _ uint32, _ unsafe.Pointer) {
+			for _, m := range unsafe.Slice(mb, nm) {
+				f.barriers = append(f.barriers, fakeBarrier{src, dst, m.SrcAccessMask, m.DstAccessMask})
+			}
 		},
 		QueueSubmit:    func(vk.Queue, uint32, *vk.SubmitInfo, vk.Fence) vk.Result { return f.step() },
 		QueueWaitIdle:  func(vk.Queue) vk.Result { return vk.Success },
