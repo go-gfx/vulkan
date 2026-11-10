@@ -51,6 +51,20 @@ func memoryType(mem *vk.PhysicalDeviceMemoryProperties, typeBits uint32) (uint32
 	return 0, false
 }
 
+// memoryTypeCached picks a host-visible, host-coherent and host-cached memory
+// type allowed by typeBits (ordinary cached system memory: the CPU reads it at
+// memory speed), else memoryType's: where no type is cached (lavapipe's one
+// type is host memory already) the buffer is as readable as it can be.
+func memoryTypeCached(mem *vk.PhysicalDeviceMemoryProperties, typeBits uint32) (uint32, bool) {
+	want := vk.MemoryPropertyFlags(vk.MemoryPropertyHostVisibleBit | vk.MemoryPropertyHostCoherentBit | vk.MemoryPropertyHostCachedBit)
+	for i := uint32(0); i < mem.MemoryTypeCount && i < uint32(len(mem.MemoryTypes)); i++ {
+		if typeBits&(1<<i) != 0 && mem.MemoryTypes[i].PropertyFlags&want == want {
+			return i, true
+		}
+	}
+	return memoryType(mem, typeBits)
+}
+
 // memoryTypeLocal picks a device-local memory type allowed by typeBits, one
 // that is not host-visible when there is one (the fast memory of a discrete
 // GPU), else any device-local type (integrated GPUs and lavapipe have only
@@ -89,8 +103,29 @@ type Buffer struct {
 // memory, mapped. The size is checked against the device limits first; every
 // handle made on the way is destroyed on an error.
 func (d *Device) NewBuffer(size uint64, usage BufferUsage) (*Buffer, error) {
-	return d.newBuffer(size, usage, false)
+	return d.newBuffer(size, usage, memHost)
 }
+
+// NewReadbackBuffer is NewBuffer for a buffer the CPU will READ: it prefers
+// host-cached memory. NewBuffer's first host-visible, host-coherent type is, on a
+// discrete GPU, write-combined: the CPU writes it fast and reads it at a few
+// hundred MB/s (an uncached read per cache line). A cached type is slower for
+// the GPU to write over PCIe than for nothing, but the CPU reads it at memory
+// speed, which is what a download staging buffer wants. It is coherent too, so
+// no invalidate is needed. Where the device has no cached type this is
+// NewBuffer.
+func (d *Device) NewReadbackBuffer(size uint64, usage BufferUsage) (*Buffer, error) {
+	return d.newBuffer(size, usage, memCached)
+}
+
+// memKind says which memory a buffer is bound to.
+type memKind int
+
+const (
+	memHost   memKind = iota // host-visible, coherent, mapped
+	memCached                // the same, preferring host-cached
+	memLocal                 // device-local, not mapped
+)
 
 // NewDeviceBuffer creates a buffer of size bytes in device-local memory that
 // the host does not map: Bytes is nil. Fill it and read it back with
@@ -102,10 +137,11 @@ func (d *Device) NewBuffer(size uint64, usage BufferUsage) (*Buffer, error) {
 // is the same memory as NewBuffer's, unmapped; on a discrete GPU it is VRAM
 // that the CPU cannot touch. The size limits are NewBuffer's.
 func (d *Device) NewDeviceBuffer(size uint64, usage BufferUsage) (*Buffer, error) {
-	return d.newBuffer(size, usage, true)
+	return d.newBuffer(size, usage, memLocal)
 }
 
-func (d *Device) newBuffer(size uint64, usage BufferUsage, local bool) (*Buffer, error) {
+func (d *Device) newBuffer(size uint64, usage BufferUsage, kind memKind) (*Buffer, error) {
+	local := kind == memLocal
 	if d.closed {
 		return nil, ErrClosed
 	}
@@ -130,8 +166,11 @@ func (d *Device) newBuffer(size uint64, usage BufferUsage, local bool) (*Buffer,
 		return nil, ErrTooLarge
 	}
 	pick := memoryType
-	if local {
+	switch kind {
+	case memLocal:
 		pick = memoryTypeLocal
+	case memCached:
+		pick = memoryTypeCached
 	}
 	mt, ok := pick(&d.mem, req.MemoryTypeBits)
 	if !ok {
