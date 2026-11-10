@@ -1,0 +1,137 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: vet
+        run: go vet ./...
+      - name: test
+        run: go test -race -count=1 ./...
+      # The gate names its packages: internal/native is the purego glue, which
+      # only runs where a Vulkan loader exists, so it is covered by the lavapipe
+      # lane below and not gated here. Everything else is pure Go, tested on a
+      # fake driver, and must be fully covered on every platform without a GPU.
+      - name: coverage gate (100%, pure-Go packages)
+        shell: bash
+        run: |
+          go test -count=1 -coverprofile=cov.out . ./internal/vk ./internal/vkgen ./cmd/vkgen
+          go tool cover -func=cov.out | tee cov.txt
+          grep -q 'total:.*100.0%' cov.txt || { echo "coverage below 100%"; exit 1; }
+      - name: generated files are current
+        run: go run ./cmd/vkgen --registry registry/vk.xml.gz --out internal/vk --check
+
+  # linux/386 builds the stub (the binding is 64-bit only: on 32-bit targets a
+  # non-dispatchable handle is a uint64 passed in two words, and purego's
+  # 32-bit Linux targets are Tier 2) and runs what is pure Go. It is exempt
+  # from the coverage gate: the stub and the generator's registry layout are
+  # computed for a 64-bit target.
+  linux-386:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: test (32-bit int)
+        env:
+          GOARCH: "386"
+        run: go test -count=1 -skip 'TestGeneratedLayout|TestHandlesAreOneWord' ./...
+
+  # The registry reader is fuzzed on every change; the corpus is committed.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go test -run '^$' -fuzz '^FuzzParse$' -fuzztime 60s ./internal/vkgen
+
+  # Cross-compile for the six 64-bit Linux architectures, tests included. The
+  # tests of the real driver skip where there is no loader.
+  cross:
+    name: cross linux/${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64, riscv64, loong64, ppc64le, s390x]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: vet, tests included
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: "0"
+        run: go vet ./...
+
+  # lavapipe (Mesa's software Vulkan) and the Khronos validation layer are
+  # oracles only: a test run on a machine that has them, never a build or run
+  # dependency. VULKAN_REQUIRE=1 turns a missing loader into a failure, so the
+  # lane cannot go green by skipping. VULKAN_VALIDATION=1 enables
+  # VK_LAYER_KHRONOS_validation; the test captures the process's stdout and
+  # stderr and fails on ANY validation message. The same lane runs the test
+  # binary built with CGO_ENABLED=0 (cross-compile, then run), the way fractal
+  # runs it.
+  lavapipe:
+    name: lavapipe + validation layer (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: install lavapipe and the validation layer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers vulkan-validationlayers vulkan-tools libvulkan1
+      - name: the devices the loader sees
+        run: vulkaninfo --summary
+      - name: compute test, validation layer on, CGO_ENABLED=0 test binary
+        env:
+          CGO_ENABLED: "0"
+          VULKAN_REQUIRE: "1"
+          VULKAN_VALIDATION: "1"
+        run: |
+          go test -c -o vulkan.test .
+          ls -l vulkan.test
+          ./vulkan.test -test.v -test.count=1
+      - name: compute test without the layer, race detector, coverage of the purego glue
+        env:
+          VULKAN_REQUIRE: "1"
+        run: |
+          go test -race -count=1 -v -coverpkg=./internal/native -coverprofile=native.out .
+          go tool cover -func=native.out
+
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...

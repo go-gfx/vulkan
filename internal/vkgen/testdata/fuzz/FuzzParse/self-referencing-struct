@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("<registry><types><type category=\"struct\" name=\"VkS\"><member><type>VkS</type> <name>x</name></member></type></types></registry>")
