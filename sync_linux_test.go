@@ -18,10 +18,11 @@ import (
 // implementation (lavapipe in CI).
 //
 //	VULKAN_SYNC_VALIDATION=1  the process runs with the layer's synchronization
-//	                          validation on: VK_LAYER_ENABLES must hold
-//	                          VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT
-//	                          (the layer reads it when the instance is created; a Go
-//	                          test cannot set it for itself with CGO_ENABLED=0).
+//	                          validation on: VK_LAYER_VALIDATE_SYNC=1 (or, for a layer
+//	                          older than 1.4.3xx, VK_LAYER_ENABLES holding
+//	                          VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT).
+//	                          The layer reads it when the instance is created; a Go
+//	                          test cannot set it for itself with CGO_ENABLED=0.
 
 const syncValidationEnable = "VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT"
 
@@ -32,8 +33,9 @@ func needSync(t *testing.T) {
 	if os.Getenv("VULKAN_SYNC_VALIDATION") != "1" {
 		t.Skip("VULKAN_SYNC_VALIDATION is not set")
 	}
-	if os.Getenv("VULKAN_VALIDATION") != "1" || !strings.Contains(os.Getenv("VK_LAYER_ENABLES"), syncValidationEnable) {
-		t.Fatalf("VULKAN_SYNC_VALIDATION=1 needs VULKAN_VALIDATION=1 and VK_LAYER_ENABLES=%s", syncValidationEnable)
+	on := strings.Contains(os.Getenv("VK_LAYER_ENABLES"), syncValidationEnable) || os.Getenv("VK_LAYER_VALIDATE_SYNC") == "1"
+	if os.Getenv("VULKAN_VALIDATION") != "1" || !on {
+		t.Fatalf("VULKAN_SYNC_VALIDATION=1 needs VULKAN_VALIDATION=1 and VK_LAYER_VALIDATE_SYNC=1 (layers before 1.4.3xx: VK_LAYER_ENABLES=%s, which newer layers answer with a deprecation warning)", syncValidationEnable)
 	}
 }
 

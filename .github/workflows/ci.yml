@@ -119,7 +119,7 @@ jobs:
           # The layer's synchronization validation, read when the instance is
           # created: the barrier tests fail if it is not on.
           VULKAN_SYNC_VALIDATION: "1"
-          VK_LAYER_ENABLES: VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT
+          VK_LAYER_VALIDATE_SYNC: "1"
         run: |
           go test -c -o vulkan.test .
           ls -l vulkan.test
