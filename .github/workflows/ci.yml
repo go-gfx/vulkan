@@ -54,6 +54,25 @@ jobs:
           GOARCH: "386"
         run: go test -count=1 -skip 'TestGeneratedLayout|TestHandlesAreOneWord' ./...
 
+  # GOOS=android satisfies the linux build tag, but purego's android Dlopen
+  # needs cgo, so android must get the stub: with the purego file built it fails
+  # `undefined: cgo.Dlopen`. Tests are vetted too (they carry the same tag).
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: vet and build, CGO-free
+        env:
+          GOOS: android
+          GOARCH: arm64
+          CGO_ENABLED: "0"
+        run: |
+          go vet ./...
+          go build ./...
+
   # The registry reader is fuzzed on every change; the corpus is committed.
   fuzz:
     runs-on: ubuntu-latest

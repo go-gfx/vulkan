@@ -1,4 +1,4 @@
-//go:build linux && (amd64 || arm64)
+//go:build linux && !android && (amd64 || arm64)
 
 // Package native opens the system Vulkan loader, libvulkan.so.1, through
 // purego and resolves the entry points of internal/vk's function tables.
