@@ -51,20 +51,61 @@ func memoryType(mem *vk.PhysicalDeviceMemoryProperties, typeBits uint32) (uint32
 	return 0, false
 }
 
-// Buffer is a VkBuffer bound to host-visible, host-coherent memory that stays
-// mapped for its whole life.
+// memoryTypeLocal picks a device-local memory type allowed by typeBits, one
+// that is not host-visible when there is one (the fast memory of a discrete
+// GPU), else any device-local type (integrated GPUs and lavapipe have only
+// one, which is also host-visible).
+func memoryTypeLocal(mem *vk.PhysicalDeviceMemoryProperties, typeBits uint32) (uint32, bool) {
+	best, found := uint32(0), false
+	for i := uint32(0); i < mem.MemoryTypeCount && i < uint32(len(mem.MemoryTypes)); i++ {
+		fl := vk.MemoryPropertyFlagBits(mem.MemoryTypes[i].PropertyFlags)
+		if typeBits&(1<<i) == 0 || fl&vk.MemoryPropertyDeviceLocalBit == 0 {
+			continue
+		}
+		if fl&vk.MemoryPropertyHostVisibleBit == 0 {
+			return i, true
+		}
+		if !found {
+			best, found = i, true
+		}
+	}
+	return best, found
+}
+
+// Buffer is a VkBuffer. A buffer from NewBuffer is bound to host-visible,
+// host-coherent memory that stays mapped for its whole life; one from
+// NewDeviceBuffer is in device-local memory and is never mapped.
 type Buffer struct {
 	d      *Device
 	buf    vk.Buffer
 	mem    vk.DeviceMemory
 	usage  BufferUsage
-	data   []byte
+	size   uint64
+	data   []byte // nil for a device buffer
 	closed bool
 }
 
-// NewBuffer creates a buffer of size bytes. The size is checked against the
-// device limits first; every handle made on the way is destroyed on an error.
+// NewBuffer creates a buffer of size bytes in host-visible, host-coherent
+// memory, mapped. The size is checked against the device limits first; every
+// handle made on the way is destroyed on an error.
 func (d *Device) NewBuffer(size uint64, usage BufferUsage) (*Buffer, error) {
+	return d.newBuffer(size, usage, false)
+}
+
+// NewDeviceBuffer creates a buffer of size bytes in device-local memory that
+// the host does not map: Bytes is nil. Fill it and read it back with
+// CommandBuffer.Copy from and to a host buffer, which must have UsageTransferSrc
+// or UsageTransferDst respectively; give the device buffer the same usage the
+// copy needs (UsageTransferDst to be filled, UsageTransferSrc to be read) plus
+// UsageStorage or UsageUniform for a shader. On a device with one memory type
+// that is both device-local and host-visible (integrated GPUs, lavapipe) this
+// is the same memory as NewBuffer's, unmapped; on a discrete GPU it is VRAM
+// that the CPU cannot touch. The size limits are NewBuffer's.
+func (d *Device) NewDeviceBuffer(size uint64, usage BufferUsage) (*Buffer, error) {
+	return d.newBuffer(size, usage, true)
+}
+
+func (d *Device) newBuffer(size uint64, usage BufferUsage, local bool) (*Buffer, error) {
 	if d.closed {
 		return nil, ErrClosed
 	}
@@ -77,7 +118,7 @@ func (d *Device) NewBuffer(size uint64, usage BufferUsage) (*Buffer, error) {
 		Usage:       vk.BufferUsageFlags(usage),
 		SharingMode: vk.SharingModeExclusive,
 	}
-	b := &Buffer{d: d, usage: usage}
+	b := &Buffer{d: d, usage: usage, size: size}
 	if err := check("vkCreateBuffer", d.f.CreateBuffer(d.h, &ci, nil, &b.buf)); err != nil {
 		return nil, err
 	}
@@ -88,7 +129,11 @@ func (d *Device) NewBuffer(size uint64, usage BufferUsage) (*Buffer, error) {
 		d.f.DestroyBuffer(d.h, b.buf, nil)
 		return nil, ErrTooLarge
 	}
-	mt, ok := memoryType(&d.mem, req.MemoryTypeBits)
+	pick := memoryType
+	if local {
+		pick = memoryTypeLocal
+	}
+	mt, ok := pick(&d.mem, req.MemoryTypeBits)
 	if !ok {
 		d.f.DestroyBuffer(d.h, b.buf, nil)
 		return nil, ErrNoMemoryType
@@ -105,6 +150,9 @@ func (d *Device) NewBuffer(size uint64, usage BufferUsage) (*Buffer, error) {
 	if err := check("vkBindBufferMemory", d.f.BindBufferMemory(d.h, b.buf, b.mem, 0)); err != nil {
 		b.release()
 		return nil, err
+	}
+	if local {
+		return b, nil
 	}
 	var p unsafe.Pointer
 	if err := check("vkMapMemory", d.f.MapMemory(d.h, b.mem, 0, uint64(vk.WholeSize), 0, &p)); err != nil {
@@ -126,11 +174,11 @@ func (b *Buffer) release() {
 
 // Bytes is the mapped memory: len(Bytes()) is the size asked for. It is valid
 // until Close, and writes by the host are visible to the device at the next
-// submission (the memory is coherent).
+// submission (the memory is coherent). It is nil for a device buffer.
 func (b *Buffer) Bytes() []byte { return b.data }
 
 // Size is the size in bytes.
-func (b *Buffer) Size() uint64 { return uint64(len(b.data)) }
+func (b *Buffer) Size() uint64 { return b.size }
 
 // Close unmaps and frees the buffer. It is safe to call twice, and a no-op
 // once the device is closed.
@@ -139,7 +187,9 @@ func (b *Buffer) Close() {
 		return
 	}
 	b.closed = true
-	b.d.f.UnmapMemory(b.d.h, b.mem)
+	if b.data != nil { // a device buffer is never mapped
+		b.d.f.UnmapMemory(b.d.h, b.mem)
+	}
 	b.release()
 	b.data = nil
 }

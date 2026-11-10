@@ -116,6 +116,10 @@ jobs:
           CGO_ENABLED: "0"
           VULKAN_REQUIRE: "1"
           VULKAN_VALIDATION: "1"
+          # The layer's synchronization validation, read when the instance is
+          # created: the barrier tests fail if it is not on.
+          VULKAN_SYNC_VALIDATION: "1"
+          VK_LAYER_VALIDATE_SYNC: "1"
         run: |
           go test -c -o vulkan.test .
           ls -l vulkan.test

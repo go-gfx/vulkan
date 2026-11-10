@@ -24,6 +24,12 @@ type Bool32 uint32
 
 type Buffer uint64
 
+type BufferCopy struct {
+	SrcOffset DeviceSize
+	DstOffset DeviceSize
+	Size      DeviceSize
+}
+
 type BufferCreateFlags uint32
 
 type BufferCreateInfo struct {
@@ -335,6 +341,28 @@ type PhysicalDeviceFeatures struct {
 	InheritedQueries                        Bool32
 }
 
+type PhysicalDeviceFloatControlsProperties struct {
+	SType                                 StructureType
+	PNext                                 unsafe.Pointer
+	DenormBehaviorIndependence            ShaderFloatControlsIndependence
+	RoundingModeIndependence              ShaderFloatControlsIndependence
+	ShaderSignedZeroInfNanPreserveFloat16 Bool32
+	ShaderSignedZeroInfNanPreserveFloat32 Bool32
+	ShaderSignedZeroInfNanPreserveFloat64 Bool32
+	ShaderDenormPreserveFloat16           Bool32
+	ShaderDenormPreserveFloat32           Bool32
+	ShaderDenormPreserveFloat64           Bool32
+	ShaderDenormFlushToZeroFloat16        Bool32
+	ShaderDenormFlushToZeroFloat32        Bool32
+	ShaderDenormFlushToZeroFloat64        Bool32
+	ShaderRoundingModeRTEFloat16          Bool32
+	ShaderRoundingModeRTEFloat32          Bool32
+	ShaderRoundingModeRTEFloat64          Bool32
+	ShaderRoundingModeRTZFloat16          Bool32
+	ShaderRoundingModeRTZFloat32          Bool32
+	ShaderRoundingModeRTZFloat64          Bool32
+}
+
 type PhysicalDeviceLimits struct {
 	MaxImageDimension1D                             uint32
 	MaxImageDimension2D                             uint32
@@ -536,6 +564,8 @@ type QueueFlags uint32
 type Result int32
 
 type SampleCountFlags uint32
+
+type ShaderFloatControlsIndependence int32
 
 type ShaderModule uint64
 
@@ -874,6 +904,7 @@ const StructureTypeInstanceCreateInfo StructureType = 1
 const StructureTypeMemoryAllocateInfo StructureType = 5
 const StructureTypeMemoryBarrier StructureType = 46
 const StructureTypePhysicalDeviceDriverProperties StructureType = 1000196000
+const StructureTypePhysicalDeviceFloatControlsProperties StructureType = 1000197000
 const StructureTypePhysicalDeviceMaintenance3Properties StructureType = 1000168000
 const StructureTypePhysicalDeviceProperties2 StructureType = 1000059001
 const StructureTypePipelineLayoutCreateInfo StructureType = 30

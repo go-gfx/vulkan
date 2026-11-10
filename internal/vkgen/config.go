@@ -19,6 +19,7 @@ func DefaultConfig() Config {
 			"VkPipelineLayoutCreateInfo", "VkPipelineShaderStageCreateInfo", "VkComputePipelineCreateInfo",
 			"VkCommandPoolCreateInfo", "VkCommandBufferAllocateInfo", "VkCommandBufferBeginInfo",
 			"VkSubmitInfo", "VkFenceCreateInfo", "VkMemoryBarrier",
+			"VkBufferCopy", "VkPhysicalDeviceFloatControlsProperties",
 		},
 		Handles: []string{
 			"VkInstance", "VkPhysicalDevice", "VkDevice", "VkQueue", "VkCommandBuffer",

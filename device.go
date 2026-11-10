@@ -61,6 +61,18 @@ type DeviceInfo struct {
 	MaxUniformBufferRange    uint32
 	MaxMemoryAllocationSize  uint64
 	MaxComputeWorkGroupCount [3]uint32
+
+	// Optional features and properties, reported so that a client can use them.
+	//
+	// RobustBufferAccess is the device's robustBufferAccess feature: offered,
+	// and enabled by PhysicalDevice.Open whenever it is (Device.RobustBufferAccess).
+	// RoundingModeRTEFloat32 is shaderRoundingModeRTEFloat32 of the Vulkan 1.2
+	// float-controls properties: a SPIR-V module may declare the RoundingModeRTE
+	// execution mode for 32-bit floats only where it is true
+	// (VUID-RuntimeSpirv-shaderRoundingModeRTEFloat32-06303). It is false on a
+	// device that does not report the properties.
+	RobustBufferAccess     bool
+	RoundingModeRTEFloat32 bool
 }
 
 // PhysicalDevice is a VkPhysicalDevice. It needs no Close.
@@ -111,12 +123,18 @@ func (in *Instance) info(i int, h vk.PhysicalDevice) DeviceInfo {
 	var drv vk.PhysicalDeviceDriverProperties
 	drv.SType = vk.StructureTypePhysicalDeviceDriverProperties
 	maint.PNext = unsafe.Pointer(&drv)
+	var fc vk.PhysicalDeviceFloatControlsProperties
+	fc.SType = vk.StructureTypePhysicalDeviceFloatControlsProperties
+	drv.PNext = unsafe.Pointer(&fc)
 	var p2 vk.PhysicalDeviceProperties2
 	p2.SType = vk.StructureTypePhysicalDeviceProperties2
 	p2.PNext = unsafe.Pointer(&maint)
 	in.f.GetPhysicalDeviceProperties2(h, &p2)
 	runtime.KeepAlive(&maint)
 	runtime.KeepAlive(&drv)
+	runtime.KeepAlive(&fc)
+	var feat vk.PhysicalDeviceFeatures
+	in.f.GetPhysicalDeviceFeatures(h, &feat)
 	p := &p2.Properties
 	return DeviceInfo{
 		Index:         i,
@@ -133,6 +151,9 @@ func (in *Instance) info(i int, h vk.PhysicalDevice) DeviceInfo {
 		MaxUniformBufferRange:    p.Limits.MaxUniformBufferRange,
 		MaxMemoryAllocationSize:  uint64(maint.MaxMemoryAllocationSize),
 		MaxComputeWorkGroupCount: p.Limits.MaxComputeWorkGroupCount,
+
+		RobustBufferAccess:     feat.RobustBufferAccess != 0,
+		RoundingModeRTEFloat32: fc.ShaderRoundingModeRTEFloat32 != 0,
 	}
 }
 
@@ -269,10 +290,18 @@ func (pd *PhysicalDevice) Open() (*Device, error) {
 		QueueCreateInfoCount: 1,
 		PQueueCreateInfos:    unsafe.Pointer(&qci),
 	}
+	// robustBufferAccess is the one optional feature enabled, when offered: a
+	// second line of defence against an out-of-range index in a kernel.
+	var enabled vk.PhysicalDeviceFeatures
+	if pd.Info.RobustBufferAccess {
+		enabled.RobustBufferAccess = 1
+		ci.PEnabledFeatures = unsafe.Pointer(&enabled)
+	}
 	var h vk.Device
 	r := in.f.CreateDevice(pd.h, &ci, nil, &h)
 	runtime.KeepAlive(&prio)
 	runtime.KeepAlive(&qci)
+	runtime.KeepAlive(&enabled)
 	if err := check("vkCreateDevice", r); err != nil {
 		return nil, err
 	}
@@ -289,6 +318,10 @@ func (pd *PhysicalDevice) Open() (*Device, error) {
 
 // Info is the physical device's description.
 func (d *Device) Info() DeviceInfo { return d.pd.Info }
+
+// RobustBufferAccess reports whether the device was created with the
+// robustBufferAccess feature enabled: it is whenever the device offers it.
+func (d *Device) RobustBufferAccess() bool { return d.pd.Info.RobustBufferAccess }
 
 // Close waits for the queue to go idle and destroys the device. The caller
 // has closed everything made from it. It is safe to call twice.

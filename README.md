@@ -34,12 +34,44 @@ ok, err := fence.Wait(time.Second)   // px.Bytes() now holds the shader's writes
 | Instance | `Options{Validation}` enables `VK_LAYER_KHRONOS_validation` (`ErrLayerNotPresent` if absent), `Instance.Close` |
 | Physical device | `Instance.Devices`, `Instance.Pick(Filter)`, `Pick(infos, Filter)`; `DeviceInfo` carries name, type, vendor, API and driver version, driver name and the limits the binding checks |
 | Device and queue | `PhysicalDevice.Open` (one compute queue), `Device.Close` |
-| Buffers | `Device.NewBuffer(size, usage)`, `Buffer.Bytes`, `Buffer.Close` |
+| Buffers | `Device.NewBuffer(size, usage)` (host-visible, mapped), `Device.NewDeviceBuffer(size, usage)` (device-local, unmapped), `Buffer.Bytes`, `Buffer.Size`, `Buffer.Close` |
 | Shader | `Device.NewShader(words)` |
 | Pipeline | `Device.NewComputePipeline(shader, entry, bindings)`, `Pipeline.Bind`; descriptor set layout, pool and set are owned by the pipeline |
-| Commands | `Device.NewCommandBuffer`, `Begin`, `Dispatch`, `End`, `Close` |
+| Commands | `Device.NewCommandBuffer`, `Begin`, `Dispatch`, `Barrier`, `Copy`, `End`, `Close` |
 | Fences | `Device.Submit`, `Fence.Wait`, `Fence.Done`, `Fence.Close` |
 | Errors | a negative `VkResult` is `*Error{Op, Result}`; `errors.Is(err, vulkan.ErrDeviceLost)` and the other sentinels |
+
+## Ordering submissions, optional features, device-local memory (v0.2.0)
+
+**`CommandBuffer.Barrier`** orders commands on the device. Queue submission
+order only orders the *start* of commands, so two submissions can overlap: a
+dispatch that reads what an earlier one wrote needs a memory dependency.
+`Barrier` records a global memory barrier from compute-shader and transfer
+writes to compute-shader and transfer reads and writes (`COMPUTE_SHADER|TRANSFER`
+to the same stages, `SHADER_WRITE|TRANSFER_WRITE` to
+`SHADER_READ|SHADER_WRITE|TRANSFER_READ|TRANSFER_WRITE`). Record it at the start
+of the later command buffer. The specification (`vkCmdPipelineBarrier`) says that
+outside a render pass the first synchronization scope "includes all commands
+that occur earlier in submission order" and the second "all commands that occur
+later in submission order", a memory dependency between commands "submitted to
+the same queue" before and after it. Both submissions are on one queue, so no
+semaphore and no host wait is needed. `Dispatch` still ends with its own
+compute-to-host barrier so mapped buffers can be read after the fence.
+
+**Optional features.** `DeviceInfo.RobustBufferAccess` is the device's
+`robustBufferAccess` feature, which `PhysicalDevice.Open` enables whenever it is
+offered (`Device.RobustBufferAccess`); no other feature is enabled.
+`DeviceInfo.RoundingModeRTEFloat32` is `shaderRoundingModeRTEFloat32` from the
+Vulkan 1.2 float-controls properties, so a client knows whether a SPIR-V module
+may declare `RoundingModeRTE` (false on a device that does not report them).
+
+**Device-local memory.** `Device.NewDeviceBuffer` is never mapped (`Bytes` is
+nil); fill it and read it back with `CommandBuffer.Copy` from and to a host
+buffer (`UsageTransferSrc` / `UsageTransferDst`), ordered with `Barrier`. It
+prefers a device-local memory type that is not host-visible. Whether a
+device-local target beats a host-visible one cannot be decided on lavapipe
+(its one memory type is both) and is not measured on a discrete GPU here: the
+choice is the caller's, and `NewBuffer` stays host-visible.
 
 ## Safety
 
@@ -84,6 +116,15 @@ The pure-Go parts run against a fake driver on every platform and are held to
   fail: a pipeline layout that does not match the shader draws a `VUID-` message.
 - A break check: binding the pixels' descriptor to the wrong buffer must not
   produce the expected bytes.
+- v0.2.0: with the layer's synchronization validation on
+  (`VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT`,
+  `VULKAN_SYNC_VALIDATION=1`), two submissions that write one buffer draw no
+  message when the second begins with `Barrier`, and **draw a `SYNC-HAZARD`
+  without it** (the break check). That layer version reports hazards between
+  transfer commands but tracked none between compute dispatches, so the
+  hazard is shown with copies. A device-buffer staging round trip (upload, fill
+  kernel, read back) is byte-exact, and a module declaring `RoundingModeRTE` runs
+  where the device reports it.
 - `VULKAN_REQUIRE=1` turns "no Vulkan here" from a skip into a failure;
   `VULKAN_VALIDATION=1` enables the layer; `VULKAN_VENDOR=0x1002` restricts the
   pick to a vendor.
