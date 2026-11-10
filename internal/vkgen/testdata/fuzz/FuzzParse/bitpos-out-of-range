@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("<registry><enums name=\"VkE\" type=\"bitmask\"><enum bitpos=\"99\" name=\"A\"/></enums></registry>")

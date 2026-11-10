@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("<registry><extension number=\"1000000\"><require><enum extends=\"VkE\" offset=\"999\" dir=\"-\" name=\"A\"/></require></extension><enums name=\"VkE\" type=\"enum\"/></registry>")
