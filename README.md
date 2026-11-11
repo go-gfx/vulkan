@@ -34,7 +34,7 @@ ok, err := fence.Wait(time.Second)   // px.Bytes() now holds the shader's writes
 | Instance | `Options{Validation}` enables `VK_LAYER_KHRONOS_validation` (`ErrLayerNotPresent` if absent), `Instance.Close` |
 | Physical device | `Instance.Devices`, `Instance.Pick(Filter)`, `Pick(infos, Filter)`; `DeviceInfo` carries name, type, vendor, API and driver version, driver name and the limits the binding checks |
 | Device and queue | `PhysicalDevice.Open` (one compute queue), `Device.Close` |
-| Buffers | `Device.NewBuffer(size, usage)` (host-visible, mapped), `Device.NewDeviceBuffer(size, usage)` (device-local, unmapped), `Buffer.Bytes`, `Buffer.Size`, `Buffer.Close` |
+| Buffers | `Device.NewBuffer(size, usage)` (host-visible, mapped), `Device.NewReadbackBuffer(size, usage)` (the same, preferring host-cached memory: the CPU reads it at memory speed, not at a write-combined type's few hundred MB/s), `Device.NewDeviceBuffer(size, usage)` (device-local, unmapped), `Buffer.Bytes`, `Buffer.Size`, `Buffer.Close` |
 | Shader | `Device.NewShader(words)` |
 | Pipeline | `Device.NewComputePipeline(shader, entry, bindings)`, `Pipeline.Bind`; descriptor set layout, pool and set are owned by the pipeline |
 | Commands | `Device.NewCommandBuffer`, `Begin`, `Dispatch`, `Barrier`, `Copy`, `End`, `Close` |

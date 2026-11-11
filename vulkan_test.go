@@ -385,6 +385,49 @@ func TestMemoryType(t *testing.T) {
 	}
 }
 
+// memoryTypeCached takes the host-cached type over an earlier uncached one (a
+// discrete GPU's write-combined GTT type comes first), and is memoryType's
+// answer where no type is cached.
+func TestMemoryTypeCached(t *testing.T) {
+	var m vk.PhysicalDeviceMemoryProperties
+	hvc := vk.MemoryPropertyFlags(vk.MemoryPropertyHostVisibleBit | vk.MemoryPropertyHostCoherentBit)
+	m.MemoryTypeCount = 4
+	m.MemoryTypes[0].PropertyFlags = vk.MemoryPropertyFlags(vk.MemoryPropertyDeviceLocalBit)
+	m.MemoryTypes[1].PropertyFlags = hvc // write-combined
+	m.MemoryTypes[2].PropertyFlags = hvc | vk.MemoryPropertyFlags(vk.MemoryPropertyDeviceLocalBit)
+	m.MemoryTypes[3].PropertyFlags = hvc | vk.MemoryPropertyFlags(vk.MemoryPropertyHostCachedBit)
+	if i, ok := memoryTypeCached(&m, 0b1111); !ok || i != 3 {
+		t.Fatal(i, ok)
+	}
+	if i, ok := memoryTypeCached(&m, 0b0111); !ok || i != 1 {
+		t.Fatalf("no cached type allowed: %d %v, want memoryType's 1", i, ok)
+	}
+	if _, ok := memoryTypeCached(&m, 0b0001); ok {
+		t.Fatal("a device-local-only type was chosen")
+	}
+}
+
+// NewReadbackBuffer is a mapped buffer with NewBuffer's size checks, and
+// leaves nothing alive when closed.
+func TestNewReadbackBuffer(t *testing.T) {
+	f := newFake()
+	in := must(openWith(f.open, Options{}))
+	d := must(must(in.Pick(Filter{})).Open())
+	b := must(d.NewReadbackBuffer(10, UsageTransferDst))
+	if b.Size() != 10 || len(b.Bytes()) != 10 {
+		t.Fatal(b.Size(), len(b.Bytes()))
+	}
+	if _, err := d.NewReadbackBuffer(1<<62, UsageTransferDst); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("a readback buffer past the device's limits: %v", err)
+	}
+	b.Close()
+	d.Close()
+	in.Close()
+	if l := f.leaks(); len(l) != 0 {
+		t.Fatalf("leaked %v", l)
+	}
+}
+
 func TestBufferErrorsAndAccessors(t *testing.T) {
 	f := newFake()
 	f.reqSize = 64
